@@ -1,24 +1,25 @@
 require('dotenv').config();
 
-const { 
-    Client, 
-    GatewayIntentBits, 
-    Partials, 
-    PermissionsBitField 
+const {
+    Client,
+    GatewayIntentBits,
+    Partials,
+    PermissionsBitField,
+    EmbedBuilder,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle
 } = require('discord.js');
 
 const express = require('express');
 const app = express();
 
-// === KEEP RENDER ALIVE ===
-app.get('/', (req, res) => {
-    res.send('Bot is alive ✅');
-});
-
+// ================= KEEP ALIVE =================
+app.get('/', (req, res) => res.send('Bot is alive ✅'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
 
-// === DISCORD CLIENT ===
+// ================= CLIENT =================
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -29,109 +30,221 @@ const client = new Client({
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-const guildId = process.env.GUILD_ID;
-
-// === VARIABLES ===
+// ================= VARIABLES =================
 let joinQueue = [];
-const spamLimit = 5;
-let messageCounts = {};
+const spamMap = new Map();
+const warnings = new Map();
+const risk = new Map();
 
-// === FUNCTION: GET LOG CHANNEL ===
-function getLogChannel(guild) {
-    return guild.channels.cache.find(c => c.name === 'security-log');
+// toggles
+let antiSpam = true;
+let antiLinks = true;
+
+// whitelist links
+const allowedDomains = ["youtube.com", "github.com"];
+
+// ================= LOG FUNCTION =================
+function log(guild, text) {
+    const channel = guild.channels.cache.find(c => c.name === 'security-log');
+    if (!channel) return;
+
+    channel.send({
+        embeds: [
+            new EmbedBuilder()
+                .setColor("Red")
+                .setDescription(text)
+                .setTimestamp()
+        ]
+    });
 }
 
-// === FEATURE 1: ANTI-RAID ===
+// ================= WARN SYSTEM =================
+function addWarn(member, reason) {
+    const id = member.id;
+
+    warnings.set(id, (warnings.get(id) || 0) + 1);
+    risk.set(id, (risk.get(id) || 0) + 1);
+
+    const warnCount = warnings.get(id);
+
+    if (warnCount === 2) {
+        member.timeout(10 * 60 * 1000).catch(() => {});
+    } else if (warnCount === 3) {
+        member.kick().catch(() => {});
+    } else if (warnCount >= 4) {
+        member.ban().catch(() => {});
+    }
+
+    log(member.guild, `⚠️ ${member.user.tag} warned (${reason}) | Total: ${warnCount}`);
+}
+
+// ================= ANTI RAID =================
 client.on('guildMemberAdd', member => {
     joinQueue.push(Date.now());
-
-    // keep only last 10s
     joinQueue = joinQueue.filter(t => Date.now() - t < 10000);
 
-    if (joinQueue.length > 3) {
-        const logChannel = getLogChannel(member.guild);
-        if (logChannel) {
-            logChannel.send(`⚠️ **Raid Alert!** ${joinQueue.length} users joined in 10 seconds.`);
-        }
-    }
-});
-
-// === FEATURE 2: SPAM + LINK FILTER + COMMANDS ===
-client.on('messageCreate', async message => {
-    if (!message.guild || message.author.bot) return;
-
-    const userId = message.author.id;
-
-    // === SPAM TRACKING ===
-    if (!messageCounts[userId]) messageCounts[userId] = [];
-
-    messageCounts[userId].push(Date.now());
-    messageCounts[userId] = messageCounts[userId].filter(t => Date.now() - t < 10000);
-
-    if (messageCounts[userId].length > spamLimit) {
-        try {
-            await message.delete();
-            const warn = await message.channel.send(`${message.author} ⚠️ Stop spamming!`);
-            setTimeout(() => warn.delete().catch(() => {}), 5000);
-        } catch {}
-        return;
-    }
-
-    // === LINK FILTER ===
-    if (/(https?:\/\/)/i.test(message.content)) {
-        try {
-            await message.delete();
-            const warn = await message.channel.send(`${message.author} ⚠️ Links are not allowed!`);
-            setTimeout(() => warn.delete().catch(() => {}), 5000);
-        } catch {}
-        return;
-    }
-
-    // === ADMIN COMMAND: LOCKDOWN ===
-    if (
-        message.content.toLowerCase() === '!lockdown' &&
-        message.member.permissions.has(PermissionsBitField.Flags.Administrator)
-    ) {
-        message.guild.channels.cache.forEach(ch => {
+    if (joinQueue.length >= 5) {
+        member.guild.channels.cache.forEach(ch => {
             if (ch.permissionOverwrites) {
                 ch.permissionOverwrites.edit(
-                    message.guild.roles.everyone,
+                    member.guild.roles.everyone,
                     { SendMessages: false }
                 ).catch(() => {});
             }
         });
 
-        message.channel.send('🚨 **Server is now in LOCKDOWN!**');
+        log(member.guild, "🚨 RAID DETECTED → SERVER LOCKED");
     }
 });
 
-// === FEATURE 3: ROLE PROTECTION ===
-client.on('roleDelete', role => {
-    const logChannel = getLogChannel(role.guild);
-    if (logChannel) {
-        logChannel.send(`⚠️ Role deleted: **${role.name}**`);
+// ================= MESSAGE SYSTEM =================
+client.on('messageCreate', async message => {
+    if (!message.guild || message.author.bot) return;
+
+    const member = message.member;
+
+    // ================= ANTI SPAM =================
+    if (antiSpam) {
+        const data = spamMap.get(member.id) || { count: 0, time: Date.now() };
+
+        if (Date.now() - data.time < 5000) data.count++;
+        else data.count = 1;
+
+        data.time = Date.now();
+        spamMap.set(member.id, data);
+
+        if (data.count >= 5) {
+            await message.delete().catch(() => {});
+            addWarn(member, "Spam");
+            return;
+        }
     }
+
+    // ================= ANTI LINK =================
+    if (antiLinks && /(https?:\/\/)/i.test(message.content)) {
+        const allowed = allowedDomains.some(d => message.content.includes(d));
+
+        if (!allowed && !member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            await message.delete().catch(() => {});
+            addWarn(member, "Unauthorized link");
+            return;
+        }
+    }
+
+    // ================= COMMANDS =================
+    if (!message.content.startsWith('!')) return;
+
+    if (!member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+
+    const args = message.content.split(" ");
+    const cmd = args[0].toLowerCase();
+
+    // LOCK
+    if (cmd === "!lock") {
+        message.channel.permissionOverwrites.edit(
+            message.guild.roles.everyone,
+            { SendMessages: false }
+        );
+
+        message.reply("🔒 Channel locked");
+    }
+
+    // UNLOCK
+    if (cmd === "!unlock") {
+        message.channel.permissionOverwrites.edit(
+            message.guild.roles.everyone,
+            { SendMessages: true }
+        );
+
+        message.reply("🔓 Channel unlocked");
+    }
+
+    // CLEAR
+    if (cmd === "!clear") {
+        const amount = parseInt(args[1]);
+        if (!amount) return message.reply("Enter number");
+
+        await message.channel.bulkDelete(amount).catch(() => {});
+    }
+
+    // WARN
+    if (cmd === "!warn") {
+        const user = message.mentions.members.first();
+        if (!user) return;
+
+        addWarn(user, "Manual warn");
+    }
+
+    // SECURITY DASHBOARD
+    if (cmd === "!security") {
+        const embed = new EmbedBuilder()
+            .setTitle("🛡️ Security Dashboard")
+            .setColor("Blue")
+            .addFields(
+                { name: "Anti Spam", value: antiSpam ? "✅ ON" : "❌ OFF", inline: true },
+                { name: "Anti Links", value: antiLinks ? "✅ ON" : "❌ OFF", inline: true }
+            );
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId("toggleSpam")
+                .setLabel("Toggle Spam")
+                .setStyle(ButtonStyle.Primary),
+
+            new ButtonBuilder()
+                .setCustomId("toggleLinks")
+                .setLabel("Toggle Links")
+                .setStyle(ButtonStyle.Danger)
+        );
+
+        message.channel.send({ embeds: [embed], components: [row] });
+    }
+});
+
+// ================= BUTTONS =================
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isButton()) return;
+
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return interaction.reply({ content: "Admin only", ephemeral: true });
+    }
+
+    if (interaction.customId === "toggleSpam") {
+        antiSpam = !antiSpam;
+    }
+
+    if (interaction.customId === "toggleLinks") {
+        antiLinks = !antiLinks;
+    }
+
+    interaction.reply({ content: "⚙️ Updated", ephemeral: true });
+});
+
+// ================= ROLE PROTECTION =================
+client.on('roleDelete', role => {
+    log(role.guild, `⚠️ Role deleted: ${role.name}`);
 });
 
 client.on('roleUpdate', (oldRole, newRole) => {
-    const logChannel = getLogChannel(newRole.guild);
-    if (logChannel && oldRole.name !== newRole.name) {
-        logChannel.send(`⚠️ Role updated: **${oldRole.name} → ${newRole.name}**`);
+    if (oldRole.name !== newRole.name) {
+        log(newRole.guild, `⚠️ Role updated: ${oldRole.name} → ${newRole.name}`);
     }
 });
 
-// === FEATURE 4: BAN LOGS ===
-client.on('guildBanAdd', (ban) => {
-    const logChannel = getLogChannel(ban.guild);
-    if (logChannel) {
-        logChannel.send(`⚠️ User banned: **${ban.user.tag}**`);
-    }
+// ================= CHANNEL PROTECTION =================
+client.on('channelDelete', channel => {
+    log(channel.guild, `⚠️ Channel deleted: ${channel.name}`);
 });
 
-// === READY ===
+// ================= BAN LOG =================
+client.on('guildBanAdd', ban => {
+    log(ban.guild, `⚠️ User banned: ${ban.user.tag}`);
+});
+
+// ================= READY =================
 client.once('ready', () => {
     console.log(`✅ ${client.user.tag} is online and protecting your server!`);
 });
 
-// === LOGIN ===
+// ================= LOGIN =================
 client.login(process.env.TOKEN);
