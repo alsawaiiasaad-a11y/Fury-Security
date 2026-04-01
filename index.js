@@ -1,4 +1,7 @@
 require('dotenv').config();
+
+require('node-fetch'); // if using CommonJS
+
 const mongoose = require('mongoose');
 const {
     Client,
@@ -18,14 +21,17 @@ const app = express();
 // ================= EXPRESS SERVER =================
 const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('Bot is alive ✅'));
-app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
+// Start web server (for Render ping)
+app.listen(PORT, () => {
+    console.log(`🌐 Web server running on port ${PORT}`);
+});
 
-// ================= SELF-PING =================
+// Self-ping to prevent sleeping
 setInterval(() => {
-    fetch(process.env.SELF_URL || `http://localhost:${PORT}`)
-        .then(() => console.log('🔁 Self-ping sent to keep bot alive'))
-        .catch(() => console.log('⚠️ Self-ping failed'));
-}, 5 * 60 * 1000);
+    fetch(process.env.SELF_URL)
+        .then(() => console.log('✅ Pinged self to stay awake'))
+        .catch(console.error);
+}, 5 * 60 * 1000); // every 5 minutes
 
 // ================= MONGODB CONNECTION =================
 const mongoURI = process.env.MONGO_URI;
