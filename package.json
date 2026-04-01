@@ -1,14 +1,31 @@
 {
-  "name": "fury-bot",
+  "name": "furysecurity",
   "version": "1.0.0",
+  "description": "Discord security bot with anti-spam, anti-raid, and link protection",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"No tests specified\" && exit 0"
   },
+  "keywords": [
+    "discord",
+    "bot",
+    "security",
+    "anti-raid",
+    "anti-spam"
+  ],
+  "author": "YourName",
+  "license": "ISC",
   "dependencies": {
-    "discord.js": "^14.25.1",
+    "discord.js": "^14.26.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "mongodb": "^7.1.1",
     "mongoose": "^9.3.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
   }
 }
