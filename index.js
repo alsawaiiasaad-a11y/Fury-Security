@@ -1,6 +1,24 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
 
+const { 
+    Client, 
+    GatewayIntentBits, 
+    Partials, 
+    PermissionsBitField 
+} = require('discord.js');
+
+const express = require('express');
+const app = express();
+
+// === KEEP RENDER ALIVE ===
+app.get('/', (req, res) => {
+    res.send('Bot is alive ✅');
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
+
+// === DISCORD CLIENT ===
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -13,76 +31,107 @@ const client = new Client({
 
 const guildId = process.env.GUILD_ID;
 
-// === Variables for Anti-Raid & Spam ===
+// === VARIABLES ===
 let joinQueue = [];
 const spamLimit = 5;
 let messageCounts = {};
 
-// === Feature 1: Anti-Raid ===
+// === FUNCTION: GET LOG CHANNEL ===
+function getLogChannel(guild) {
+    return guild.channels.cache.find(c => c.name === 'security-log');
+}
+
+// === FEATURE 1: ANTI-RAID ===
 client.on('guildMemberAdd', member => {
     joinQueue.push(Date.now());
+
+    // keep only last 10s
     joinQueue = joinQueue.filter(t => Date.now() - t < 10000);
-    
+
     if (joinQueue.length > 3) {
-        const logChannel = member.guild.channels.cache.find(c => c.name === 'security-log');
-        if (logChannel) logChannel.send(`⚠️ Possible raid detected! ${joinQueue.length} new joins in 10s.`);
+        const logChannel = getLogChannel(member.guild);
+        if (logChannel) {
+            logChannel.send(`⚠️ **Raid Alert!** ${joinQueue.length} users joined in 10 seconds.`);
+        }
     }
 });
 
-// === Feature 2: Spam & Link Filter ===
-client.on('messageCreate', message => {
-    if (message.author.bot) return;
+// === FEATURE 2: SPAM + LINK FILTER + COMMANDS ===
+client.on('messageCreate', async message => {
+    if (!message.guild || message.author.bot) return;
 
-    // Spam tracking
-    if (!messageCounts[message.author.id]) messageCounts[message.author.id] = [];
-    messageCounts[message.author.id].push(Date.now());
-    messageCounts[message.author.id] = messageCounts[message.author.id].filter(t => Date.now() - t < 10000);
+    const userId = message.author.id;
 
-    if (messageCounts[message.author.id].length > spamLimit) {
-        message.delete();
-        message.channel.send(`${message.author} ⚠️ Please stop spamming!`).then(msg => setTimeout(() => msg.delete(), 5000));
+    // === SPAM TRACKING ===
+    if (!messageCounts[userId]) messageCounts[userId] = [];
+
+    messageCounts[userId].push(Date.now());
+    messageCounts[userId] = messageCounts[userId].filter(t => Date.now() - t < 10000);
+
+    if (messageCounts[userId].length > spamLimit) {
+        try {
+            await message.delete();
+            const warn = await message.channel.send(`${message.author} ⚠️ Stop spamming!`);
+            setTimeout(() => warn.delete().catch(() => {}), 5000);
+        } catch {}
+        return;
     }
 
-    // Link filter
-    if (/(https?:\/\/)/.test(message.content)) {
-        message.delete();
-        message.channel.send(`${message.author} ⚠️ Links are not allowed!`).then(msg => setTimeout(() => msg.delete(), 5000));
+    // === LINK FILTER ===
+    if (/(https?:\/\/)/i.test(message.content)) {
+        try {
+            await message.delete();
+            const warn = await message.channel.send(`${message.author} ⚠️ Links are not allowed!`);
+            setTimeout(() => warn.delete().catch(() => {}), 5000);
+        } catch {}
+        return;
+    }
+
+    // === ADMIN COMMAND: LOCKDOWN ===
+    if (
+        message.content.toLowerCase() === '!lockdown' &&
+        message.member.permissions.has(PermissionsBitField.Flags.Administrator)
+    ) {
+        message.guild.channels.cache.forEach(ch => {
+            if (ch.permissionOverwrites) {
+                ch.permissionOverwrites.edit(
+                    message.guild.roles.everyone,
+                    { SendMessages: false }
+                ).catch(() => {});
+            }
+        });
+
+        message.channel.send('🚨 **Server is now in LOCKDOWN!**');
     }
 });
 
-// === Feature 3: Role & Permission Protection ===
+// === FEATURE 3: ROLE PROTECTION ===
 client.on('roleDelete', role => {
-    const logChannel = role.guild.channels.cache.find(c => c.name === 'security-log');
-    if (logChannel) logChannel.send(`⚠️ Role deleted: ${role.name}`);
+    const logChannel = getLogChannel(role.guild);
+    if (logChannel) {
+        logChannel.send(`⚠️ Role deleted: **${role.name}**`);
+    }
 });
 
 client.on('roleUpdate', (oldRole, newRole) => {
-    const logChannel = newRole.guild.channels.cache.find(c => c.name === 'security-log');
-    if (logChannel) logChannel.send(`⚠️ Role updated: ${oldRole.name} → ${newRole.name}`);
-});
-
-// === Feature 4: Auto-Moderation Logs ===
-client.on('guildBanAdd', (guild, user) => {
-    const logChannel = guild.channels.cache.find(c => c.name === 'security-log');
-    if (logChannel) logChannel.send(`⚠️ User banned: ${user.tag}`);
-});
-
-// === Feature 5: Verification Removed ===
-// Handled by your auto-role bot, nothing needed here
-
-// === Feature 6: Emergency Lockdown ===
-client.on('messageCreate', async message => {
-    if (!message.guild) return;
-    if (!message.member.permissions.has('Administrator')) return;
-    if (message.content.toLowerCase() === '!lockdown') {
-        message.guild.channels.cache.forEach(ch => ch.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: false }));
-        message.channel.send('🚨 Server is now in lockdown!');
+    const logChannel = getLogChannel(newRole.guild);
+    if (logChannel && oldRole.name !== newRole.name) {
+        logChannel.send(`⚠️ Role updated: **${oldRole.name} → ${newRole.name}**`);
     }
 });
 
-// === Ready Event ===
+// === FEATURE 4: BAN LOGS ===
+client.on('guildBanAdd', (ban) => {
+    const logChannel = getLogChannel(ban.guild);
+    if (logChannel) {
+        logChannel.send(`⚠️ User banned: **${ban.user.tag}**`);
+    }
+});
+
+// === READY ===
 client.once('ready', () => {
     console.log(`✅ ${client.user.tag} is online and protecting your server!`);
 });
 
+// === LOGIN ===
 client.login(process.env.TOKEN);
