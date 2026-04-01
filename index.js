@@ -1,7 +1,5 @@
 require('dotenv').config();
-
-require('node-fetch'); // if using CommonJS
-
+const fetch = require('node-fetch'); // Fix for self-ping
 const mongoose = require('mongoose');
 const {
     Client,
@@ -14,24 +12,25 @@ const {
     ButtonStyle
 } = require('discord.js');
 const express = require('express');
-const fetch = require('node-fetch'); // For self-ping
-
 const app = express();
 
 // ================= EXPRESS SERVER =================
 const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('Bot is alive ✅'));
-// Start web server (for Render ping)
+
 app.listen(PORT, () => {
     console.log(`🌐 Web server running on port ${PORT}`);
 });
 
-// Self-ping to prevent sleeping
-setInterval(() => {
-    fetch(process.env.SELF_URL)
-        .then(() => console.log('✅ Pinged self to stay awake'))
-        .catch(console.error);
-}, 5 * 60 * 1000); // every 5 minutes
+// ================= SELF-PING =================
+// Keeps Render instance awake
+if (process.env.SELF_URL) {
+    setInterval(() => {
+        fetch(process.env.SELF_URL)
+            .then(() => console.log('✅ Pinged self to stay awake'))
+            .catch(console.error);
+    }, 5 * 60 * 1000); // every 5 minutes
+}
 
 // ================= MONGODB CONNECTION =================
 const mongoURI = process.env.MONGO_URI;
@@ -41,11 +40,11 @@ if (!mongoURI) {
 }
 
 mongoose.connect(mongoURI)
-.then(() => console.log('✅ Connected to MongoDB'))
-.catch(err => {
-    console.error('❌ MongoDB connection error:', err);
-    process.exit(1);
-});
+    .then(() => console.log('✅ Connected to MongoDB'))
+    .catch(err => {
+        console.error('❌ MongoDB connection error:', err);
+        process.exit(1);
+    });
 
 // ================= DISCORD CLIENT =================
 const client = new Client({
@@ -115,7 +114,7 @@ client.on('messageCreate', async message => {
         data.time = Date.now();
         spamMap.set(member.id, data);
         if (data.count >= 5) {
-            await message.delete().catch(() => {}); // حذف الرسالة فقط
+            await message.delete().catch(() => {});
             return;
         }
     }
@@ -124,7 +123,7 @@ client.on('messageCreate', async message => {
     if (antiLinks && /(https?:\/\/)/i.test(message.content)) {
         const allowed = allowedDomains.some(d => message.content.includes(d));
         if (!allowed && !member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            await message.delete().catch(() => {}); // حذف الرسالة فقط
+            await message.delete().catch(() => {});
             return;
         }
     }
