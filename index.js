@@ -11,12 +11,22 @@ const {
     ButtonStyle
 } = require('discord.js');
 const express = require('express');
+const fetch = require('node-fetch'); // For self-ping
+
 const app = express();
 
 // ================= EXPRESS SERVER =================
 const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('Bot is alive ✅'));
 app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
+
+// ================= SELF-PING =================
+// This keeps Render free plan from sleeping
+setInterval(() => {
+    fetch(process.env.SELF_URL || `http://localhost:${PORT}`)
+        .then(() => console.log('🔁 Self-ping sent to keep bot alive'))
+        .catch(() => console.log('⚠️ Self-ping failed'));
+}, 5 * 60 * 1000); // every 5 minutes
 
 // ================= MONGODB CONNECTION =================
 const mongoURI = process.env.MONGO_URI;
@@ -57,7 +67,7 @@ const allowedDomains = ["youtube.com", "github.com"];
 
 // ================= LOG FUNCTION =================
 function log(guild, text) {
-    const channel = guild.channels.cache.get(process.env.LOG_CHANNEL_ID) 
+    const channel = guild.channels.cache.get(process.env.LOG_CHANNEL_ID)
                   || guild.channels.cache.find(c => c.name === 'security-log');
     if (!channel) return;
     channel.send({ embeds: [new EmbedBuilder().setColor("Red").setDescription(text).setTimestamp()] });
